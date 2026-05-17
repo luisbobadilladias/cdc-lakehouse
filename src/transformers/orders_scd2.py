@@ -15,7 +15,7 @@ or filter on `effective_from / effective_to` to see any point-in-time snapshot.
 """
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json
+from pyspark.sql.functions import coalesce, col, desc, from_json, row_number
 from pyspark.sql.types import (
     DoubleType,
     IntegerType,
@@ -24,6 +24,7 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
+from pyspark.sql.window import Window
 
 # ─── SPARK SESSION ────────────────────────────────────────────────────────────
 spark = (
@@ -121,26 +122,23 @@ def apply_scd2(batch_df, batch_id):
     if batch_df.isEmpty():
         return
 
-    # Deduplicate within the batch.
-    # If Spark replays a micro-batch (e.g. after a crash), duplicate LSNs would
-    # create ghost records.  Dropping on LSN makes this function idempotent.
-    # For multiple ops on the same id (rapid succession), we keep only the latest
-    # via a window function so we never open two "active" records for one row.
-    batch_df.createOrReplaceTempView("_cdc_raw")
+    # Deduplicate within the batch using the DataFrame API (not SQL) to avoid
+    # temp-view scoping issues in PySpark's Py4J bridge.
+    # If the same id appears multiple times (rapid updates) keep only the latest
+    # LSN so we never open two active records for one row.
+    # Idempotent on replay: duplicate LSNs are collapsed to one row.
+    w = Window.partitionBy(
+        coalesce(col("after.id"), col("before.id"))
+    ).orderBy(desc("source.lsn"))
 
-    spark.sql("""
-        CREATE OR REPLACE TEMP VIEW cdc_batch AS
-        SELECT *
-        FROM (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(after.id, before.id)
-                    ORDER BY source.lsn DESC
-                ) AS _rank
-            FROM _cdc_raw
-        )
-        WHERE _rank = 1
-    """)
+    deduped = (
+        batch_df
+        .withColumn("_rank", row_number().over(w))
+        .filter(col("_rank") == 1)
+        .drop("_rank")
+    )
+
+    deduped.createOrReplaceTempView("cdc_batch")
 
     # ── Step 1: close the active record for any UPDATE or DELETE ──────────────
     # MERGE INTO finds the single row where is_current=true for that id and
