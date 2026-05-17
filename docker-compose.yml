@@ -128,6 +128,7 @@ services:
       SPARK_LOCAL_IP: "0.0.0.0"
     volumes:
       - ./src/transformers:/opt/spark/work   # job scripts
+      - ./queries:/opt/spark/queries         # SQL query scripts
       - ./warehouse:/warehouse               # Iceberg data files
       - spark_ivy:/root/.ivy2               # JAR download cache
     ports:
