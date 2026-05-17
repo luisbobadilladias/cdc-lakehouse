@@ -117,7 +117,7 @@ services:
   # Spark and Trino are defined here but not started until their phases.
   # Start them with: docker compose --profile analytics up -d
   spark:
-    image: bitnami/spark:3.5
+    image: bitnami/spark:3.5.3
     container_name: cdc_spark
     networks: [lakehouse]
     profiles: [analytics]
