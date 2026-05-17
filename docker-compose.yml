@@ -1,5 +1,3 @@
-version: "3.8"
-
 # All services share one internal network so they can reach each other by container name.
 # External ports are exposed only where you need to connect from your host machine.
 networks:
@@ -86,7 +84,7 @@ services:
   # and streams every row-level change (INSERT/UPDATE/DELETE) into Kafka topics,
   # with a "before" and "after" snapshot for each event.
   kafka-connect:
-    image: debezium/connect:2.7
+    image: quay.io/debezium/connect:2.7
     container_name: cdc_connect
     networks: [lakehouse]
     depends_on:
