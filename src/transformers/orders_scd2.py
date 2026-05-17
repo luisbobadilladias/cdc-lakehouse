@@ -15,7 +15,7 @@ or filter on `effective_from / effective_to` to see any point-in-time snapshot.
 """
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import coalesce, col, desc, from_json, row_number
+from pyspark.sql.functions import coalesce, col, desc, from_json, lit, row_number, to_timestamp
 from pyspark.sql.types import (
     DoubleType,
     IntegerType,
@@ -122,11 +122,8 @@ def apply_scd2(batch_df, batch_id):
     if batch_df.isEmpty():
         return
 
-    # Deduplicate within the batch using the DataFrame API (not SQL) to avoid
-    # temp-view scoping issues in PySpark's Py4J bridge.
-    # If the same id appears multiple times (rapid updates) keep only the latest
-    # LSN so we never open two active records for one row.
-    # Idempotent on replay: duplicate LSNs are collapsed to one row.
+    # Deduplicate: for rapid successive changes to the same id within one
+    # micro-batch, keep only the event with the highest LSN.
     w = Window.partitionBy(
         coalesce(col("after.id"), col("before.id"))
     ).orderBy(desc("source.lsn"))
@@ -138,48 +135,51 @@ def apply_scd2(batch_df, batch_id):
         .drop("_rank")
     )
 
-    deduped.createOrReplaceTempView("cdc_batch")
+    # ── Step 1: close active records for UPDATEs and DELETEs ─────────────────
+    # We use SQL UPDATE (not MERGE INTO) and collect the changed IDs to the
+    # driver first.  This sidesteps the Iceberg SQL extension's inability to
+    # resolve PySpark temp views across catalog boundaries.
+    # Batch sizes in this pipeline are small (≤ rows changed per trigger), so
+    # collecting to driver is safe.
+    rows_to_close = (
+        deduped
+        .filter(col("op").isin("u", "d"))
+        .select(
+            coalesce(col("after.id"), col("before.id")).alias("id"),
+            to_timestamp(col("ts_ms") / 1000).alias("event_ts"),
+        )
+        .collect()
+    )
 
-    # ── Step 1: close the active record for any UPDATE or DELETE ──────────────
-    # MERGE INTO finds the single row where is_current=true for that id and
-    # sets effective_to + is_current=false. It's a no-op if no active record
-    # exists yet (possible on replay).
-    spark.sql("""
-        MERGE INTO local.ecommerce.orders_scd2 AS t
-        USING (
-            SELECT
-                COALESCE(after.id, before.id) AS id,
-                to_timestamp(ts_ms / 1000)    AS event_ts
-            FROM cdc_batch
-            WHERE op IN ('u', 'd')
-        ) AS s
-        ON t.id = s.id AND t.is_current = true
-        WHEN MATCHED THEN UPDATE SET
-            t.is_current   = false,
-            t.effective_to = s.event_ts
-    """)
+    for row in rows_to_close:
+        spark.sql(f"""
+            UPDATE local.ecommerce.orders_scd2
+            SET    is_current   = false,
+                   effective_to = TIMESTAMP '{row.event_ts}'
+            WHERE  id = {row.id} AND is_current = true
+        """)
 
-    # ── Step 2: insert the new active record for INSERTs, UPDATEs, snapshots ──
-    # DELETEs are intentionally excluded — the closed record from step 1 is the
-    # tombstone. No new "deleted" row is inserted; adjust if compliance rules
-    # require an explicit deleted record.
-    spark.sql("""
-        INSERT INTO local.ecommerce.orders_scd2
-        SELECT
-            after.id,
-            after.user_id,
-            after.status,
-            after.total_amount,
-            CAST(after.created_at AS TIMESTAMP),
-            CAST(after.updated_at AS TIMESTAMP),
-            to_timestamp(ts_ms / 1000)   AS effective_from,
-            CAST(null AS TIMESTAMP)      AS effective_to,
-            true                         AS is_current,
-            op                           AS _op,
-            source.lsn                   AS _source_lsn
-        FROM cdc_batch
-        WHERE op IN ('r', 'c', 'u')
-    """)
+    # ── Step 2: append new active records for INSERTs, UPDATEs, snapshots ────
+    # DELETEs are excluded — the closed record from step 1 is the tombstone.
+    new_records = (
+        deduped
+        .filter(col("op").isin("r", "c", "u"))
+        .select(
+            col("after.id").alias("id"),
+            col("after.user_id").alias("user_id"),
+            col("after.status").alias("status"),
+            col("after.total_amount").alias("total_amount"),
+            col("after.created_at").cast("timestamp").alias("created_at"),
+            col("after.updated_at").cast("timestamp").alias("updated_at"),
+            to_timestamp(col("ts_ms") / 1000).alias("effective_from"),
+            lit(None).cast("timestamp").alias("effective_to"),
+            lit(True).alias("is_current"),
+            col("op").alias("_op"),
+            col("source.lsn").alias("_source_lsn"),
+        )
+    )
+
+    new_records.writeTo("local.ecommerce.orders_scd2").append()
 
 
 # ─── START ────────────────────────────────────────────────────────────────────
