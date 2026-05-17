@@ -117,19 +117,20 @@ services:
   # Spark and Trino are defined here but not started until their phases.
   # Start them with: docker compose --profile analytics up -d
   spark:
-    image: bitnami/spark:3.5.3
+    image: apache/spark:3.5.3
     container_name: cdc_spark
     networks: [lakehouse]
     profiles: [analytics]
+    user: root   # write access to mounted warehouse and ivy2 cache volumes
+    # Keep the container alive; jobs are submitted via `docker exec` + spark-submit
+    command: ["/bin/bash", "-c", "while true; do sleep 3600; done"]
     environment:
-      SPARK_MODE: master
-      SPARK_MASTER_WEBUI_PORT: "8888"
+      SPARK_LOCAL_IP: "0.0.0.0"
     volumes:
-      - ./src/transformers:/opt/bitnami/spark/work    # job scripts
-      - ./warehouse:/warehouse                         # Iceberg data files
-      - spark_ivy:/root/.ivy2                          # JAR download cache
+      - ./src/transformers:/opt/spark/work   # job scripts
+      - ./warehouse:/warehouse               # Iceberg data files
+      - spark_ivy:/root/.ivy2               # JAR download cache
     ports:
-      - "8888:8888"  # Spark master web UI
       - "4040:4040"  # Spark application UI (active while a job runs)
 
   trino:
