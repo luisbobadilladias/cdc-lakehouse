@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git Conventions
+
+Use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`
+
+Common types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `ci`
+
 ## Project
 
 `cdc-lakehouse` is a sandbox project. The repository is currently in its initial state with no source code, tooling, or infrastructure defined yet.
