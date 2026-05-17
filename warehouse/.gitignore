@@ -1,0 +1,3 @@
+# Ignore generated Iceberg data and metadata, but keep the directory
+*
+!.gitignore

@@ -6,6 +6,7 @@ networks:
 
 volumes:
   postgres_data:
+  spark_ivy:     # caches Maven JARs so packages aren't re-downloaded on every restart
 
 services:
 
@@ -122,12 +123,14 @@ services:
     profiles: [analytics]
     environment:
       SPARK_MODE: master
+      SPARK_MASTER_WEBUI_PORT: "8888"
     volumes:
-      - ./src/transformers:/opt/spark/work
-      - ./warehouse:/opt/spark/warehouse
+      - ./src/transformers:/opt/bitnami/spark/work    # job scripts
+      - ./warehouse:/warehouse                         # Iceberg data files
+      - spark_ivy:/root/.ivy2                          # JAR download cache
     ports:
-      - "8888:8888"  # Jupyter / notebook UI
-      - "4040:4040"  # Spark UI
+      - "8888:8888"  # Spark master web UI
+      - "4040:4040"  # Spark application UI (active while a job runs)
 
   trino:
     image: trinodb/trino:435
