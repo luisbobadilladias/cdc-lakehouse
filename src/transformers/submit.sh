@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-docker exec cdc_spark spark-submit \
+docker exec cdc_spark /opt/spark/bin/spark-submit \
   --master "local[*]" \
   --packages \
     org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,\
