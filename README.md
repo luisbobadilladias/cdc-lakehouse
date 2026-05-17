@@ -97,3 +97,30 @@ docker exec -it cdc_postgres psql -U postgres -d ecommerce \
 **WAL tailing vs polling**: Debezium reads PostgreSQL's internal replication stream rather than running `SELECT` queries. This means zero additional load on your source database, even under high write rates.
 
 **`snapshot.mode = initial`**: When the connector first starts it performs a one-time consistent snapshot of all existing rows, then switches to streaming new WAL events. This is how seed data lands in Kafka.
+
+---
+
+## Future Work
+
+### Phase 5 — Trino query engine
+Trino cannot use Iceberg's `hadoop` catalog — it requires a catalog server that both Spark and Trino talk to over the REST API. The path forward:
+1. Stand up a **Nessie** or **Iceberg REST Catalog** container in `docker-compose.yml`
+2. Replace `spark.sql.catalog.local.type=hadoop` with `type=rest` pointing at the catalog server
+3. Configure Trino's `etc/catalog/iceberg.properties` to use the same REST endpoint
+
+Once both engines share a catalog, you get federated SQL: Spark writes, Trino reads the same live Iceberg table — and `VERSION AS OF` time-travel works from Trino too.
+
+### Disable Debezium schema envelopes
+By default Debezium wraps every message in `{"schema": {...}, "payload": {...}}`. This doubles message size and requires the `get_json_object(value, "$.payload")` extraction step in the transformer. Setting `value.converter.schemas.enable=false` in `debezium-connector.json` makes the value the raw payload directly, simplifying the PySpark schema parsing.
+
+### Filter no-op updates
+If a Postgres `UPDATE` touches a row without changing any column values, Debezium still emits a `u` event and SCD2 creates a new version pair. Add a filter in `apply_scd2` that compares `before` and `after` field-by-field and skips the write when they're identical.
+
+### `users` table transformer
+Only `orders` has an SCD2 transformer. A `users_scd2.py` job would follow the same pattern and let you join user history to order history at any point in time.
+
+### Continuous write simulator
+`src/producer/` is a placeholder. A script that loops random inserts, updates, and deletes against Postgres would make it easier to demo the pipeline under realistic load and verify deduplication (the LSN-based `row_number()` window) across rapid successive changes to the same row.
+
+### Schema evolution
+The `order_row` StructType is hardcoded. If a column is added to the Postgres `orders` table, the transformer silently ignores it. Wiring in a **Schema Registry** (Redpanda ships one) and generating the Spark schema from the registered Avro/JSON schema would make the transformer automatically adapt to upstream DDL changes.
