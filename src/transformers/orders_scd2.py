@@ -15,7 +15,7 @@ or filter on `effective_from / effective_to` to see any point-in-time snapshot.
 """
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import coalesce, col, desc, from_json, lit, row_number, to_timestamp
+from pyspark.sql.functions import coalesce, col, desc, from_json, get_json_object, lit, row_number, to_timestamp
 from pyspark.sql.types import (
     DoubleType,
     IntegerType,
@@ -113,7 +113,10 @@ raw_stream = (
 )
 
 events = raw_stream.select(
-    from_json(col("value").cast("string"), debezium_schema).alias("d")
+    from_json(
+        get_json_object(col("value").cast("string"), "$.payload"),
+        debezium_schema,
+    ).alias("d")
 ).select("d.*")
 
 
